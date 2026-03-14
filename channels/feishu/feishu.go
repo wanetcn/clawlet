@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -179,7 +180,7 @@ func (c *Channel) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to connect to feishu websocket: %w", err)
 	}
 
-	fmt.Printf("feishu channel started (app_id=%s)\n", c.appID[:min(12, len(c.appID))])
+	log.Printf("feishu channel started (app_id=%s)\n", c.appID[:min(12, len(c.appID))])
 
 	return runCtx.Err()
 }
@@ -221,7 +222,7 @@ func (c *Channel) connect(ctx context.Context) error {
 	connID := u.Query().Get("device_id")
 	serviceID := u.Query().Get("service_id")
 
-	fmt.Printf("feishu: got websocket endpoint (conn_id=%s, service_id=%s)\n", connID, serviceID)
+	log.Printf("feishu: got websocket endpoint (conn_id=%s, service_id=%s)\n", connID, serviceID)
 
 	// Connect
 	conn, _, err := websocket.DefaultDialer.Dial(connURL, nil)
@@ -236,7 +237,7 @@ func (c *Channel) connect(ctx context.Context) error {
 	c.serviceID = serviceID
 	c.mu.Unlock()
 
-	fmt.Println("feishu: websocket connected")
+	log.Println("feishu: websocket connected")
 
 	// Start ping loop
 	go c.pingLoop(ctx)
@@ -302,7 +303,7 @@ func (c *Channel) receiveMessageLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("feishu: receiveMessageLoop: context done")
+			log.Println("feishu: receiveMessageLoop: context done")
 			return
 		default:
 		}
@@ -312,22 +313,22 @@ func (c *Channel) receiveMessageLoop(ctx context.Context) {
 		c.mu.Unlock()
 
 		if conn == nil {
-			fmt.Println("feishu: receiveMessageLoop: connection is nil")
+			log.Println("feishu: receiveMessageLoop: connection is nil")
 			return
 		}
 
 		mt, msg, err := conn.ReadMessage()
 		if err != nil {
-			fmt.Printf("feishu: receiveMessageLoop: read error: %v\n", err)
+			log.Printf("feishu: receiveMessageLoop: read error: %v\n", err)
 			c.disconnect(ctx)
 			go c.reconnect(ctx)
 			return
 		}
 
-		fmt.Printf("feishu: <<< received WS message: type=%d, len=%d\n", mt, len(msg))
+		log.Printf("feishu: <<< received WS message: type=%d, len=%d\n", mt, len(msg))
 
 		if mt != websocket.BinaryMessage {
-			fmt.Printf("feishu: received non-binary message type: %d\n", mt)
+			log.Printf("feishu: received non-binary message type: %d\n", mt)
 			continue
 		}
 
@@ -338,31 +339,31 @@ func (c *Channel) receiveMessageLoop(ctx context.Context) {
 func (c *Channel) handleMessage(ctx context.Context, msg []byte) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("feishu: handleMessage panic: %v\n", r)
+			log.Printf("feishu: handleMessage panic: %v\n", r)
 		}
 	}()
 
-	fmt.Printf("feishu: handling message (%d bytes): % x\n", len(msg), msg[:min(32, len(msg))])
+	log.Printf("feishu: handling message (%d bytes): % x\n", len(msg), msg[:min(32, len(msg))])
 
 	// Parse frame using official SDK
 	var frame ws.Frame
 	if err := frame.Unmarshal(msg); err != nil {
-		fmt.Printf("feishu: unmarshal frame failed: %v\n", err)
+		log.Printf("feishu: unmarshal frame failed: %v\n", err)
 		return
 	}
 
-	fmt.Printf("feishu: parsed frame: method=%d, service=%d, len(headers)=%d, len(payload)=%d\n",
+	log.Printf("feishu: parsed frame: method=%d, service=%d, len(headers)=%d, len(payload)=%d\n",
 		frame.Method, frame.Service, len(frame.Headers), len(frame.Payload))
 
 	// Handle based on frame type
 	if frame.Method == 0 { // CONTROL
-		fmt.Println("feishu: handling CONTROL frame")
+		log.Println("feishu: handling CONTROL frame")
 		c.handleControlFrame(ctx, frame)
 	} else if frame.Method == 1 { // DATA
-		fmt.Println("feishu: handling DATA frame")
+		log.Println("feishu: handling DATA frame")
 		c.handleDataFrame(ctx, frame)
 	} else {
-		fmt.Printf("feishu: unknown frame method: %d\n", frame.Method)
+		log.Printf("feishu: unknown frame method: %d\n", frame.Method)
 	}
 }
 
@@ -371,7 +372,7 @@ func (c *Channel) handleControlFrame(ctx context.Context, frame ws.Frame) {
 	t := hs.GetString("type")
 
 	if t == "pong" {
-		fmt.Println("feishu: received pong")
+		log.Println("feishu: received pong")
 		if len(frame.Payload) > 0 {
 			var conf struct {
 				PingInterval      int `json:"ping_interval"`
@@ -393,32 +394,32 @@ func (c *Channel) handleDataFrame(ctx context.Context, frame ws.Frame) {
 	traceID := hs.GetString("trace_id")
 	type_ := hs.GetString("type")
 
-	fmt.Printf("feishu: received data frame: type=%s, msg_id=%s, trace_id=%s\n", type_, msgID, traceID)
+	log.Printf("feishu: received data frame: type=%s, msg_id=%s, trace_id=%s\n", type_, msgID, traceID)
 
 	if type_ != "event" {
-		fmt.Printf("feishu: skipping non-event frame\n")
+		log.Printf("feishu: skipping non-event frame\n")
 		return
 	}
 
 	// Parse event payload
 	var payload feishuEventPayload
 	if err := json.Unmarshal(frame.Payload, &payload); err != nil {
-		fmt.Printf("feishu: unmarshal event payload failed: %v\n", err)
+		log.Printf("feishu: unmarshal event payload failed: %v\n", err)
 		return
 	}
 
-	fmt.Printf("feishu: event type: %s\n", payload.Header.EventType)
+	log.Printf("feishu: event type: %s\n", payload.Header.EventType)
 
 	// Handle message receive events
 	if payload.Header.EventType == "im.message.receive_v1" || payload.Header.EventType == "im.message.receive_v2" {
-		fmt.Printf("feishu: processing %s event\n", payload.Header.EventType)
+		log.Printf("feishu: processing %s event\n", payload.Header.EventType)
 
 		if payload.Event == nil {
-			fmt.Println("feishu: event is nil")
+			log.Println("feishu: event is nil")
 			return
 		}
 		if payload.Event.Message == nil {
-			fmt.Println("feishu: event.Message is nil")
+			log.Println("feishu: event.Message is nil")
 			return
 		}
 		msg := payload.Event.Message
@@ -449,19 +450,19 @@ func (c *Channel) handleDataFrame(ctx context.Context, frame ws.Frame) {
 			chatType = *msg.ChatType
 		}
 
-		fmt.Printf("feishu: received message: chatID=%s, senderID=%s, msgType=%s, chatType=%s, content=%s\n",
+		log.Printf("feishu: received message: chatID=%s, senderID=%s, msgType=%s, chatType=%s, content=%s\n",
 			chatID, senderIDStr, msgType, chatType, content)
 
 		// Process the message
 		c.processMessageV2(ctx, msg, frame.Payload, hs, senderIDStr)
 	} else {
-		fmt.Printf("feishu: unhandled event type: %s\n", payload.Header.EventType)
+		log.Printf("feishu: unhandled event type: %s\n", payload.Header.EventType)
 	}
 }
 
 func (c *Channel) processMessageV2(ctx context.Context, msg *feishuEventMessage, rawPayload []byte, hs ws.Headers, senderID string) {
 	if msg == nil {
-		fmt.Println("feishu: message is nil")
+		log.Println("feishu: message is nil")
 		return
 	}
 
@@ -495,13 +496,13 @@ func (c *Channel) processMessageV2(ctx context.Context, msg *feishuEventMessage,
 		parentID = *msg.ParentID
 	}
 
-	fmt.Printf("feishu: processing message: ID=%s, chatID=%s, senderID=%s, msgType=%s\n", messageID, chatID, senderID, msgType)
+	log.Printf("feishu: processing message: ID=%s, chatID=%s, senderID=%s, msgType=%s\n", messageID, chatID, senderID, msgType)
 
 	// Dedup check
 	c.processedMu.Lock()
 	if c.processedIDs[messageID] {
 		c.processedMu.Unlock()
-		fmt.Printf("feishu: duplicate message %s, skipping\n", messageID)
+		log.Printf("feishu: duplicate message %s, skipping\n", messageID)
 		return
 	}
 	c.processedIDs[messageID] = true
@@ -517,7 +518,7 @@ func (c *Channel) processMessageV2(ctx context.Context, msg *feishuEventMessage,
 
 	// Ignore bot's own messages
 	if c.botOpenID != "" && senderID == c.botOpenID {
-		fmt.Println("feishu: ignoring bot's own message")
+		log.Println("feishu: ignoring bot's own message")
 		return
 	}
 
@@ -531,40 +532,40 @@ func (c *Channel) processMessageV2(ctx context.Context, msg *feishuEventMessage,
 	case "file":
 		c.processFileMessage(ctx, content, senderID, chatID, messageID, rootID, parentID, isDirect)
 	default:
-		fmt.Printf("feishu: unsupported message type: %s\n", msgType)
+		log.Printf("feishu: unsupported message type: %s\n", msgType)
 	}
 }
 
 func (c *Channel) processTextMessage(ctx context.Context, content, senderID, chatID, messageID, rootID, parentID string, isDirect bool) {
 	var msgContent feishuMessageContent
 	if err := json.Unmarshal([]byte(content), &msgContent); err != nil {
-		fmt.Printf("feishu: failed to parse content: %v\n", err)
+		log.Printf("feishu: failed to parse content: %v\n", err)
 		return
 	}
 
 	text := strings.TrimSpace(msgContent.Text)
-	fmt.Printf("feishu: message text: %s\n", text)
+	log.Printf("feishu: message text: %s\n", text)
 	if text == "" {
-		fmt.Println("feishu: empty message text")
+		log.Println("feishu: empty message text")
 		return
 	}
 
 	// Check allowlist
 	if !c.allow.Allowed(senderID) {
-		fmt.Printf("feishu: sender %s not in allowlist\n", senderID)
+		log.Printf("feishu: sender %s not in allowlist\n", senderID)
 		return
 	}
 
 	// Strip bot @mention
 	text = c.stripBotMention(text)
-	fmt.Printf("feishu: after strip mention: %s\n", text)
+	log.Printf("feishu: after strip mention: %s\n", text)
 	if text == "" {
-		fmt.Println("feishu: empty text after stripping mentions")
+		log.Println("feishu: empty text after stripping mentions")
 		return
 	}
 
 	// Publish to bus
-	fmt.Println("feishu: publishing to bus")
+	log.Println("feishu: publishing to bus")
 	_ = c.bus.PublishInbound(ctx, bus.InboundMessage{
 		Channel:    "feishu",
 		SenderID:   senderID,
@@ -589,20 +590,20 @@ func (c *Channel) processImageMessage(ctx context.Context, content, senderID, ch
 		ImageKey string `json:"image_key"`
 	}
 	if err := json.Unmarshal([]byte(content), &imgContent); err != nil {
-		fmt.Printf("feishu: failed to parse image content: %v, raw: %s\n", err, content)
+		log.Printf("feishu: failed to parse image content: %v, raw: %s\n", err, content)
 		return
 	}
 
 	if imgContent.ImageKey == "" {
-		fmt.Println("feishu: empty image_key")
+		log.Println("feishu: empty image_key")
 		return
 	}
 
-	fmt.Printf("feishu: received image: image_key=%s\n", imgContent.ImageKey)
+	log.Printf("feishu: received image: image_key=%s\n", imgContent.ImageKey)
 
 	// Check allowlist
 	if !c.allow.Allowed(senderID) {
-		fmt.Printf("feishu: sender %s not in allowlist\n", senderID)
+		log.Printf("feishu: sender %s not in allowlist\n", senderID)
 		return
 	}
 
@@ -610,7 +611,7 @@ func (c *Channel) processImageMessage(ctx context.Context, content, senderID, ch
 	localPath := ""
 	downloadedPath, err := c.downloadImage(ctx, imgContent.ImageKey, chatID)
 	if err != nil {
-		fmt.Printf("feishu: failed to download image: %v (continuing without local file)\n", err)
+		log.Printf("feishu: failed to download image: %v (continuing without local file)\n", err)
 	} else {
 		localPath = downloadedPath
 	}
@@ -640,7 +641,7 @@ func (c *Channel) processImageMessage(ctx context.Context, content, senderID, ch
 
 	// Send acknowledgment response to Feishu
 	c.sendEventAck(ctx, messageID, "")
-	fmt.Println("feishu: image message published to bus")
+	log.Println("feishu: image message published to bus")
 }
 
 func (c *Channel) processFileMessage(ctx context.Context, content, senderID, chatID, messageID, rootID, parentID string, isDirect bool) {
@@ -649,20 +650,20 @@ func (c *Channel) processFileMessage(ctx context.Context, content, senderID, cha
 		FileName string `json:"file_name"`
 	}
 	if err := json.Unmarshal([]byte(content), &fileContent); err != nil {
-		fmt.Printf("feishu: failed to parse file content: %v\n", err)
+		log.Printf("feishu: failed to parse file content: %v\n", err)
 		return
 	}
 
 	if fileContent.FileKey == "" {
-		fmt.Println("feishu: empty file_key")
+		log.Println("feishu: empty file_key")
 		return
 	}
 
-	fmt.Printf("feishu: received file: file_key=%s\n", fileContent.FileKey)
+	log.Printf("feishu: received file: file_key=%s\n", fileContent.FileKey)
 
 	// Check allowlist
 	if !c.allow.Allowed(senderID) {
-		fmt.Printf("feishu: sender %s not in allowlist\n", senderID)
+		log.Printf("feishu: sender %s not in allowlist\n", senderID)
 		return
 	}
 
@@ -670,7 +671,7 @@ func (c *Channel) processFileMessage(ctx context.Context, content, senderID, cha
 	localPath := ""
 	downloadedPath, err := c.downloadFile(ctx, fileContent.FileKey, chatID, fileContent.FileName)
 	if err != nil {
-		fmt.Printf("feishu: failed to download file: %v (continuing without local file)\n", err)
+		log.Printf("feishu: failed to download file: %v (continuing without local file)\n", err)
 	} else {
 		localPath = downloadedPath
 	}
@@ -705,30 +706,30 @@ func (c *Channel) processFileMessage(ctx context.Context, content, senderID, cha
 
 	// Send acknowledgment response to Feishu
 	c.sendEventAck(ctx, messageID, "")
-	fmt.Println("feishu: file message published to bus")
+	log.Println("feishu: file message published to bus")
 }
 
 func (c *Channel) publishMessageToBus(ctx context.Context, senderID, chatID, text, messageID, rootID, parentID string, isDirect bool) {
 	// Check allowlist
 	if !c.allow.Allowed(senderID) {
-		fmt.Printf("feishu: sender %s not in allowlist\n", senderID)
+		log.Printf("feishu: sender %s not in allowlist\n", senderID)
 		return
 	}
 
 	// Strip bot @mention
 	text = c.stripBotMention(text)
-	fmt.Printf("feishu: after strip mention: %s\n", text)
+	log.Printf("feishu: after strip mention: %s\n", text)
 	if text == "" {
-		fmt.Println("feishu: empty text after stripping mentions")
+		log.Println("feishu: empty text after stripping mentions")
 		return
 	}
 
 	// Determine if direct message
 	isDirect = isDirect || strings.HasPrefix(chatID, "oc_")
-	fmt.Printf("feishu: isDirect=%v\n", isDirect)
+	log.Printf("feishu: isDirect=%v\n", isDirect)
 
 	// Publish to bus
-	fmt.Println("feishu: publishing to bus")
+	log.Println("feishu: publishing to bus")
 	_ = c.bus.PublishInbound(ctx, bus.InboundMessage{
 		Channel:    "feishu",
 		SenderID:   senderID,
@@ -756,7 +757,7 @@ func (c *Channel) sendEventAck(ctx context.Context, msgID, traceID string) {
 	}
 
 	sid := int32(0)
-	fmt.Sscanf(serviceID, "%d", &sid)
+	_, _ = fmt.Sscanf(serviceID, "%d", &sid)
 
 	// Build response frame
 	response := map[string]interface{}{
@@ -779,9 +780,9 @@ func (c *Channel) sendEventAck(ctx context.Context, msgID, traceID string) {
 
 	data, _ := frame.Marshal()
 	if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
-		fmt.Printf("feishu: failed to send event ack: %v\n", err)
+		log.Printf("feishu: failed to send event ack: %v\n", err)
 	} else {
-		fmt.Println("feishu: sent event acknowledgment")
+		log.Println("feishu: sent event acknowledgment")
 	}
 }
 
@@ -815,7 +816,7 @@ func (c *Channel) stripBotMention(text string) string {
 func (c *Channel) pingLoop(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("feishu: ping loop panic: %v\n", r)
+			log.Printf("feishu: ping loop panic: %v\n", r)
 		}
 	}()
 
@@ -840,15 +841,15 @@ func (c *Channel) sendPing(ctx context.Context) {
 	}
 
 	i := int32(0)
-	fmt.Sscanf(serviceID, "%d", &i)
+	_, _ = fmt.Sscanf(serviceID, "%d", &i)
 
 	frame := ws.NewPingFrame(i)
 	bs, _ := frame.Marshal()
 
 	if err := conn.WriteMessage(websocket.BinaryMessage, bs); err != nil {
-		fmt.Printf("feishu: ping failed: %v\n", err)
+		log.Printf("feishu: ping failed: %v\n", err)
 	} else {
-		fmt.Println("feishu: sent ping")
+		log.Println("feishu: sent ping")
 	}
 }
 
@@ -857,7 +858,7 @@ func (c *Channel) reconnect(ctx context.Context) {
 		return
 	}
 
-	fmt.Println("feishu: attempting to reconnect...")
+	log.Println("feishu: attempting to reconnect...")
 
 	// Random nonce for first reconnect
 	if c.reconnectCount < 0 || c.reconnectCount > 0 {
@@ -867,7 +868,7 @@ func (c *Channel) reconnect(ctx context.Context) {
 	count := 0
 	for c.reconnectCount < 0 || count < c.reconnectCount {
 		if err := c.connect(ctx); err != nil {
-			fmt.Printf("feishu: reconnect failed: %v\n", err)
+			log.Printf("feishu: reconnect failed: %v\n", err)
 			count++
 			time.Sleep(c.reconnectInterval)
 			continue
@@ -875,7 +876,7 @@ func (c *Channel) reconnect(ctx context.Context) {
 		return
 	}
 
-	fmt.Printf("feishu: reconnect failed after %d attempts\n", count)
+	log.Printf("feishu: reconnect failed after %d attempts\n", count)
 }
 
 func (c *Channel) disconnect(ctx context.Context) {
@@ -887,7 +888,7 @@ func (c *Channel) disconnect(ctx context.Context) {
 	}
 
 	c.conn.Close()
-	fmt.Printf("feishu: disconnected from %s\n", c.connURL)
+	log.Printf("feishu: disconnected from %s\n", c.connURL)
 
 	c.conn = nil
 	c.connURL = nil
@@ -965,7 +966,7 @@ func (c *Channel) downloadImage(ctx context.Context, imageKey, chatID string) (s
 		return "", err
 	}
 
-	fmt.Printf("feishu: image saved to %s\n", localPath)
+	log.Printf("feishu: image saved to %s\n", localPath)
 	return localPath, nil
 }
 
@@ -1007,7 +1008,7 @@ func (c *Channel) downloadFile(ctx context.Context, fileKey, chatID, fileName st
 		return "", err
 	}
 
-	fmt.Printf("feishu: file saved to %s\n", localPath)
+	log.Printf("feishu: file saved to %s\n", localPath)
 	return localPath, nil
 }
 
@@ -1040,7 +1041,7 @@ func (c *Channel) saveToWorkspace(filename string, data []byte) (string, error) 
 func (c *Channel) fetchBotOpenID(ctx context.Context) {
 	token, err := c.getTenantAccessToken(ctx)
 	if err != nil {
-		fmt.Printf("feishu: failed to get token for bot info: %v\n", err)
+		log.Printf("feishu: failed to get token for bot info: %v\n", err)
 		return
 	}
 
@@ -1066,12 +1067,12 @@ func (c *Channel) fetchBotOpenID(ctx context.Context) {
 
 	if result.Code == 0 && result.Bot.OpenID != "" {
 		c.botOpenID = result.Bot.OpenID
-		fmt.Printf("feishu: bot open_id=%s\n", c.botOpenID[:min(12, len(c.botOpenID))])
+		log.Printf("feishu: bot open_id=%s\n", c.botOpenID[:min(12, len(c.botOpenID))])
 	}
 }
 
 func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
-	fmt.Printf("feishu: Send called: channel=%s, chatID=%s, content=%s, attachments=%d\n",
+	log.Printf("feishu: Send called: channel=%s, chatID=%s, content=%s, attachments=%d\n",
 		msg.Channel, msg.ChatID, msg.Content, len(msg.Attachments))
 
 	text := strings.TrimSpace(msg.Content)
@@ -1079,12 +1080,12 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 
 	// If only attachments, send them
 	if text == "" && len(attachments) > 0 {
-		fmt.Printf("feishu: sending only attachments\n")
+		log.Printf("feishu: sending only attachments\n")
 		for i, att := range attachments {
-			fmt.Printf("feishu: attachment[%d]: name=%s, kind=%s, localPath=%s, hasData=%v\n",
+			log.Printf("feishu: attachment[%d]: name=%s, kind=%s, localPath=%s, hasData=%v\n",
 				i, att.Name, att.Kind, att.LocalPath, att.Data != nil)
 			if err := c.sendAttachment(ctx, msg.ChatID, att, msg); err != nil {
-				fmt.Printf("feishu: failed to send attachment: %v\n", err)
+				log.Printf("feishu: failed to send attachment: %v\n", err)
 				return err
 			}
 		}
@@ -1093,22 +1094,22 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 
 	// If only text, send text
 	if text != "" && len(attachments) == 0 {
-		fmt.Printf("feishu: sending only text\n")
+		log.Printf("feishu: sending only text\n")
 		return c.sendTextMessage(ctx, msg.ChatID, text, msg)
 	}
 
 	// If both text and attachments, send text first then attachments
 	if text != "" {
-		fmt.Printf("feishu: sending text first\n")
+		log.Printf("feishu: sending text first\n")
 		if err := c.sendTextMessage(ctx, msg.ChatID, text, msg); err != nil {
 			return err
 		}
 	}
 
 	for i, att := range attachments {
-		fmt.Printf("feishu: sending attachment[%d]: name=%s, kind=%s\n", i, att.Name, att.Kind)
+		log.Printf("feishu: sending attachment[%d]: name=%s, kind=%s\n", i, att.Name, att.Kind)
 		if err := c.sendAttachment(ctx, msg.ChatID, att, msg); err != nil {
-			fmt.Printf("feishu: failed to send attachment: %v\n", err)
+			log.Printf("feishu: failed to send attachment: %v\n", err)
 			return err
 		}
 	}
@@ -1148,7 +1149,7 @@ func (c *Channel) sendTextMessage(ctx context.Context, chatID, text string, msg 
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	fmt.Printf("feishu: sending message to %s (%s): %s\n", receiveID, receiverType, text)
+	log.Printf("feishu: sending message to %s (%s): %s\n", receiveID, receiverType, text)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -1157,7 +1158,7 @@ func (c *Channel) sendTextMessage(ctx context.Context, chatID, text string, msg 
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	fmt.Printf("feishu: send response: status=%d, body=%s\n", resp.StatusCode, string(respBody))
+	log.Printf("feishu: send response: status=%d, body=%s\n", resp.StatusCode, string(respBody))
 
 	var result struct {
 		Code int    `json:"code"`
@@ -1174,7 +1175,7 @@ func (c *Channel) sendTextMessage(ctx context.Context, chatID, text string, msg 
 		return fmt.Errorf("feishu API error: code=%d, msg=%s", result.Code, result.Msg)
 	}
 
-	fmt.Printf("feishu: message sent successfully, message_id=%s\n", result.Data.MessageID)
+	log.Printf("feishu: message sent successfully, message_id=%s\n", result.Data.MessageID)
 	return nil
 }
 
@@ -1239,7 +1240,7 @@ func (c *Channel) sendAttachment(ctx context.Context, chatID string, att bus.Att
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	fmt.Printf("feishu: sending %s: key=%s\n", msgType, fileID)
+	log.Printf("feishu: sending %s: key=%s\n", msgType, fileID)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -1248,7 +1249,7 @@ func (c *Channel) sendAttachment(ctx context.Context, chatID string, att bus.Att
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	fmt.Printf("feishu: send response: status=%d, body=%s\n", resp.StatusCode, string(respBody))
+	log.Printf("feishu: send response: status=%d, body=%s\n", resp.StatusCode, string(respBody))
 
 	var result struct {
 		Code int    `json:"code"`
@@ -1265,7 +1266,7 @@ func (c *Channel) sendAttachment(ctx context.Context, chatID string, att bus.Att
 		return fmt.Errorf("feishu API error: code=%d, msg=%s", result.Code, result.Msg)
 	}
 
-	fmt.Printf("feishu: %s sent successfully, message_id=%s\n", msgType, result.Data.MessageID)
+	log.Printf("feishu: %s sent successfully, message_id=%s\n", msgType, result.Data.MessageID)
 
 	return nil
 }
@@ -1307,7 +1308,7 @@ func (c *Channel) uploadFile(ctx context.Context, token string, data []byte, fil
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	fmt.Printf("feishu: uploading %s (name=%s, size=%d) to %s\n", fieldName, filename, len(data), url)
+	log.Printf("feishu: uploading %s (name=%s, size=%d) to %s\n", fieldName, filename, len(data), url)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -1316,7 +1317,7 @@ func (c *Channel) uploadFile(ctx context.Context, token string, data []byte, fil
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	fmt.Printf("feishu: upload response: status=%d, body=%s\n", resp.StatusCode, string(respBody))
+	log.Printf("feishu: upload response: status=%d, body=%s\n", resp.StatusCode, string(respBody))
 
 	if isImage {
 		// Parse image response
@@ -1338,7 +1339,7 @@ func (c *Channel) uploadFile(ctx context.Context, token string, data []byte, fil
 		if result.Data.ImageKey == "" {
 			return "", fmt.Errorf("feishu upload succeeded but no image_key returned")
 		}
-		fmt.Printf("feishu: image upload succeeded, image_key=%s\n", result.Data.ImageKey)
+		log.Printf("feishu: image upload succeeded, image_key=%s\n", result.Data.ImageKey)
 		return result.Data.ImageKey, nil
 	} else {
 		// Parse file response
@@ -1365,7 +1366,7 @@ func (c *Channel) uploadFile(ctx context.Context, token string, data []byte, fil
 		if key == "" {
 			return "", fmt.Errorf("feishu upload succeeded but no file_key returned")
 		}
-		fmt.Printf("feishu: file upload succeeded, file_key=%s\n", key)
+		log.Printf("feishu: file upload succeeded, file_key=%s\n", key)
 		return key, nil
 	}
 }
